@@ -1,0 +1,523 @@
+---
+title: "Corces-Buenrostro AML dataset NMF"
+author: "Health Data Science Unit"
+date: "`r date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 4
+    number_sections: false
+params:
+  work_dir: "~/Corces_NMF"
+editor_options: 
+  chunk_output_type: console
+---
+
+
+
+```{r setup, include=FALSE, message=FALSE, warning=FALSE, echo=FALSE}
+#this chunk sets global options for Rmarkdown
+knitr::opts_knit$set(root.dir=params$work_dir)
+knitr::opts_chunk$set(echo = FALSE)
+options(knitr.table.format="html")
+
+library(Bratwurst)
+library(ggplot2)
+library(viridis)
+library(ComplexHeatmap)
+
+
+library(knitr)
+
+```
+
+# NMF on Gene expression and Chromatin accessibility data  
+
+```{r helper_functions}
+```
+
+## Gene expression (RNAseq)
+
+### Data loading
+  
+Read normalized gene expression matrix...
+  
+```{r rna_dataloading, results="asis", message=FALSE}
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                         Read normalized data                               ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+# read normalized matrix
+rna.norm.mat <- readRDS("data/rnaseq/rnaseq_normalized_counts.RDS")
+rna.annotation <- readRDS("data/rnaseq/rnaseq_annotation.RDS")
+
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                          Print dataset dimension                           ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+
+cat("Dimension of transcriptome dataset (RNAseq):  \n\n  ") 
+kable(data.frame(dim(rna.norm.mat), row.names = c("features", "samples")), 
+      col.names = "") 
+
+```
+
+
+### Applying NMF
+
+Applying Non-Negative Matrix Factorization (NMF) to normalized transcriptome data (RNAseq) 
+
+Factorization parameters:
+  
+```{r rna_NMF_param, results="asis"}
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##              Parameters to run NMF in GPUs using  pythonCuda               ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+k.min <- 8
+k.max <- 10
+outer.iter <- 10
+inner.iter <- 2*10^4
+
+kable(data.frame(c(k.min, k.max, outer.iter, inner.iter), 
+                 row.names = c("k.min", "k.max", "outer.iter", "inner.iter")), 
+      col.names = "") 
+
+```
+
+
+
+```{r rna_NMF_run, message=FALSE, warning=FALSE, cache=TRUE}
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##              Create nmf experiment object and run NMF                      ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+rna.nmf.exp <- nmfExperimentFromMatrix(matrix = rna.norm.mat)
+
+
+rna.nmf.exp <- runNMFtensor(rna.nmf.exp, 
+                            k.min = k.min, 
+                            k.max = k.max, 
+                            outer.iter = outer.iter, 
+                            inner.iter = inner.iter, 
+                            conver.test.niter = 10, 
+                            conver.test.stop.threshold = 40)
+
+
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                               Normalize NMF                                ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+rna.norm.nmf.exp <- normalizeW(rna.nmf.exp)
+
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                      K stats and normalization                             ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+## Estimate K stats
+rna.norm.nmf.exp <- my.kstats(rna.norm.nmf.exp)
+
+```
+ 
+ 
+### Factorization quality metrics and optimal K
+
+Based on the results of the factorization quality metrics, an optimal number of signatures (k) must be chosen:
+  
+```{r rna_NMF_optK, results='hide',fig.keep='all', message=FALSE, warning=FALSE}
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                            Plot K stats                                    ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+gg.optKr <- my.plotKstats(rna.norm.nmf.exp, "NMF factorization quality metrics")
+gg.optKr
+
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                        Generate river plot                                 ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+river <- generateRiverplot(rna.norm.nmf.exp)
+plot(river, plot_area=1, yscale=0.6, nodewidth=0.5)
+
+
+
+```
+
+Minize the Frobenius error, the coefficient of variation and the mean Amari distance, while maximizing the sum and mean silhouette width and the cophenic coefficient.
+  
+### H Matrix, W normalized:  {.tabset}  
+  
+  
+```{r rna_Hmatrix_Wnorm, fig.width=8, fig.height=5.5, out.width="90%", results='asis', warning=FALSE}
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                        H matrix heatmap annotation                         ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+#Annotation for H matrix heatmap
+# Define color vector
+type.colVector <- list(Celltype = setNames(rna.annotation$color[match(levels(rna.annotation$Celltype), rna.annotation$Celltype)],
+         levels(rna.annotation$Celltype))
+)
+
+# Build Heatmap annotation
+heat.anno <- HeatmapAnnotation(df = data.frame(Celltype = rna.annotation$Celltype),
+                               col = type.colVector,
+                               show_annotation_name = TRUE, na_col = "white")
+
+
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##              Generate H matrix heatmap, W normalized                       ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+
+for(ki in names(rna.norm.nmf.exp@HMatrixList)) {
+  cat("\n")
+  cat("  \n#### H matrix for k=",  ki, "  {.tabset}   \n  ")
+  #plot H matrix
+  tmp.hmatrix <- HMatrix(rna.norm.nmf.exp, k = ki)
+  colnames(tmp.hmatrix) <- colnames(rna.norm.nmf.exp)
+  h.heatmap <- Heatmap(tmp.hmatrix,
+                       col = viridis(100),
+                       name = "Exposure",
+                       clustering_distance_columns = 'pearson',
+                       show_column_dend = TRUE,
+                       heatmap_legend_param = 
+                         list(color_bar = "continuous", legend_height=unit(2, "cm")),
+                       top_annotation = heat.anno,
+                       show_column_names = FALSE,
+                       show_row_names = FALSE,
+                       cluster_rows = FALSE)
+  print(h.heatmap)
+  
+  cat("  \n Recovery plots for k=",  ki, "  \n  ")
+  
+  recovery_plot(tmp.hmatrix, rna.annotation, "Celltype")
+  
+  }
+
+
+
+
+
+
+```
+
+
+## Chromatin accessibility (ATACseq)
+
+### Data loading
+  
+Read normalized chromatin accessibility matrix...
+  
+```{r atac_dataloading, results="asis", message=FALSE}
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                         Read normalized data                               ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+# read normalized matrix
+atac.norm.mat <- readRDS("data/atacseq/atacseq_normalized_counts.RDS")
+atac.annotation <- readRDS("data/atacseq/atacseq_annotation.RDS")
+
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                          Print dataset dimension                           ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+
+cat("Dimension of Chromatin accessibility dataset (ATACseq):  \n\n  ") 
+kable(data.frame(dim(atac.norm.mat), row.names = c("features", "samples")), 
+      col.names = "") 
+
+```
+
+
+### Applying NMF
+
+Applying Non-Negative Matrix Factorization (NMF) to normalized Chromatin accessibility data (ATACseq) 
+
+Factorization parameters:
+  
+```{r atac_NMF_param, results="asis"}
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##              Parameters to run NMF in GPUs using  pythonCuda               ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+k.min <- 8
+k.max <- 10
+outer.iter <- 10
+inner.iter <- 2*10^4
+
+kable(data.frame(c(k.min, k.max, outer.iter, inner.iter), 
+                 row.names = c("k.min", "k.max", "outer.iter", "inner.iter")), 
+      col.names = "") 
+
+```
+
+
+
+```{r atac_NMF_run, message=FALSE, warning=FALSE, cache=TRUE}
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##              Create nmf experiment object and run NMF                      ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+atac.nmf.exp <- nmfExperimentFromMatrix(matrix = atac.norm.mat)
+
+
+atac.nmf.exp <- runNMFtensor(atac.nmf.exp, 
+                            k.min = k.min, 
+                            k.max = k.max, 
+                            outer.iter = outer.iter, 
+                            inner.iter = inner.iter, 
+                            conver.test.niter = 10, 
+                            conver.test.stop.threshold = 40)
+
+
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                               Normalize NMF                                ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+atac.norm.nmf.exp <- normalizeW(atac.nmf.exp)
+
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                      K stats and normalization                             ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+## Estimate K stats
+atac.norm.nmf.exp <- my.kstats(atac.norm.nmf.exp)
+
+```
+ 
+ 
+### Factorization quality metrics and optimal K
+
+Based on the results of the factorization quality metrics, an optimal number of signatures (k) must be chosen:
+  
+```{r atac_NMF_optK, results='hide',fig.keep='all', message=FALSE, warning=FALSE}
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                            Plot K stats                                    ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+gg.optKr <- my.plotKstats(atac.norm.nmf.exp, "NMF factorization quality metrics")
+gg.optKr
+
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                        Generate river plot                                 ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+river <- generateRiverplot(atac.norm.nmf.exp)
+plot(river, plot_area=1, yscale=0.6, nodewidth=0.5)
+
+
+
+```
+
+Minize the Frobenius error, the coefficient of variation and the mean Amari distance, while maximizing the sum and mean silhouette width and the cophenic coefficient.
+  
+### H Matrix, W normalized:  {.tabset}  
+  
+  
+```{r atac_Hmatrix_Wnorm, fig.width=8, fig.height=5.5, out.width="90%", results='asis', warning=FALSE}
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                        H matrix heatmap annotation                         ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+#Annotation for H matrix heatmap
+# Define color vector
+type.colVector <- list(Celltype = setNames(atac.annotation$color[match(levels(atac.annotation$Celltype), atac.annotation$Celltype)],
+         levels(atac.annotation$Celltype))
+)
+
+# Build Heatmap annotation
+heat.anno <- HeatmapAnnotation(df = data.frame(Celltype = atac.annotation$Celltype),
+                               col = type.colVector,
+                               show_annotation_name = TRUE, na_col = "white")
+
+
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##              Generate H matrix heatmap, W normalized                       ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+for(ki in names(atac.norm.nmf.exp@HMatrixList)) {
+  cat("\n")
+  cat("  \n#### H matrix for k=",  ki, "  {.tabset}   \n  ")
+  #plot H matrix
+  tmp.hmatrix <- HMatrix(atac.norm.nmf.exp, k = ki)
+  colnames(tmp.hmatrix) <- colnames(atac.norm.nmf.exp)
+  h.heatmap <- Heatmap(tmp.hmatrix,
+                       col = viridis(100),
+                       name = "Exposure",
+                       clustering_distance_columns = 'pearson',
+                       show_column_dend = TRUE,
+                       heatmap_legend_param = 
+                         list(color_bar = "continuous", legend_height=unit(2, "cm")),
+                       top_annotation = heat.anno,
+                       show_column_names = FALSE,
+                       show_row_names = FALSE,
+                       cluster_rows = FALSE)
+  print(h.heatmap)
+  
+  cat("  \n Recovery plots for k=",  ki, "  \n  ")
+  
+  recovery_plot(tmp.hmatrix, atac.annotation, "Celltype")
+  
+  }
+
+
+
+```
+
+
+```{r helper_functions}
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                            Compute K stats and                             ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+## Estimate K stats
+my.kstats <- function(NMFexperiment){
+  # calc different k stats
+  NMFexperiment <- computeFrobErrorStats(NMFexperiment)
+  NMFexperiment <- computeSilhoutteWidth(NMFexperiment)
+  NMFexperiment <- computeCopheneticCoeff(NMFexperiment)
+  NMFexperiment <- computeAmariDistances(NMFexperiment)
+  return(NMFexperiment)
+}
+
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                            Plot K stats                                    ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+my.plotKstats <- function(NMFexperiment, title){
+  # visualize k stats
+  gg.optKr <- plotKStats(NMFexperiment)
+  gg.optKr <- gg.optKr + theme_bw() + 
+    ggtitle(title) +
+    theme(plot.title=element_text(hjust=0.5))
+  return(gg.optKr)
+}
+
+
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                          Plot H matrix heatmap                             ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+
+my.plotHMatrices <- function(NMFexperiment, heat.anno, col=viridis(n=100)){
+  for(ki in names(NMFexperiment@HMatrixList)) {
+  cat("\n")
+  cat("  \n#### H matrix for k=",  ki, "  \n  ")
+  #plot H matrix
+  tmp.hmatrix <- HMatrix(NMFexperiment, k = ki)
+  colnames(tmp.hmatrix) <- colnames(NMFexperiment)
+  h.heatmap <- Heatmap(tmp.hmatrix,
+                       col = col,
+                       name = "Exposure",
+                       clustering_distance_columns = 'pearson',
+                       show_column_dend = TRUE,
+                       heatmap_legend_param = 
+                         list(color_bar = "continuous", legend_height=unit(2, "cm")),
+                       top_annotation = heat.anno,
+                       show_column_names = TRUE,
+                       show_row_names = FALSE,
+                       cluster_rows = FALSE)
+  print(h.heatmap)
+  }
+}
+#my.plotHMatrices(rna.norm.nmf.exp, heat.anno)
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                      Recovery plots functions                              ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+
+auc <- function(rnk.list,max=NULL) {
+  aux = sapply(rnk.list,function(rnk) {
+    if (is.null(max)) {max = max(rnk)} 
+    rnk = sort(rnk)
+    X = 0
+    i = 1
+    ngenes = length(rnk)
+    while ((rnk[i] <= max) && (i <= length(rnk))) {X = X + max -rnk[i];i = i+1}
+    rauc = X/(i-1)/max
+    return(rauc)
+  })
+  return(aux)
+}
+
+roc <- function(rnk.list,max=NULL,title=NULL) {
+  require(RColorBrewer)
+  col = brewer.pal(length(rnk.list),'Set1')
+  rnk = c(1,rnk.list[[1]])
+  if (is.null(max)) {max = max(rnk)} else {rnk=c(rnk,max)}
+  plot(rnk,(1:length(rnk))/length(rnk),type='s',col=col[1],lwd=3,main=title,ylab='',xlab='Ranks')
+  for (i in 2:length(rnk.list)) {
+    rnk = c(1,rnk.list[[i]])
+    if (is.null(max)) {max = max(rnk)} else {rnk=c(rnk,max)}
+    lines(rnk,(1:length(rnk))/length(rnk),type='s',col=col[i],lwd=3)
+  }
+  L = length(rnk.list[[1]])
+  abline(1/L,(1-1/L)/(max),lty=2,lwd=2,col='darkgrey')
+  legend('bottomright',legend = names(rnk.list),col=col,lwd=3)
+}
+
+recovery_plot <- function(h, annot, annotID){
+  which.a = annotID
+  annot.factor <- annot[,annotID]
+  
+  n.samples = nrow(annot)
+  
+  ALL.RNKS = lapply(levels(annot.factor),function(l) {
+  RNKS=lapply(1:nrow(h),function(i) {
+    exp = sort(h[i,],decreasing=TRUE)
+    i.rnk = match(rownames(annot)[annot.factor==l],names(exp))
+    i.rnk = sort(i.rnk[!is.na(i.rnk)])
+    return(i.rnk)
+  })
+  names(RNKS) = paste0('Sig ',1:length(RNKS))
+  return(RNKS)
+  })
+    names(ALL.RNKS) = levels(annot.factor)
+    
+    AUC.RAND = lapply(ALL.RNKS,function(r) {
+    do.call('rbind',lapply(r, function(x) {
+      ##
+      l = lapply(1:500,function(i) {
+        sample(1:n.samples,length(x))
+      })
+      aux = auc(l,max=n.samples)
+      return(c(mean(aux),sd(aux)))
+    }))
+      })
+  
+  AUC = lapply(ALL.RNKS,auc,max=n.samples)
+  
+  
+  PVAL = lapply(1:length(AUC),function(i) {
+    x = data.frame(AUC.RAND[[i]],AUC[[i]])
+    colnames(x) = c('mean','sd','val')
+    z = (x[,3]-x[,1])/x[,2]
+    p = ifelse(z>0,pnorm(z,lower.tail=FALSE),pnorm(z))
+    x$z = z
+    x$p = p
+    return(x)
+  })
+  names(PVAL) = names(AUC)
+  
+  
+  for (n in names(ALL.RNKS)) {
+    cat("\n")
+    cat("  \n##### ",  n, "  \n  ")
+    #print(n)
+    RNKS = ALL.RNKS[[n]]
+    names(RNKS) = paste0(names(RNKS),' - Pval = ',sprintf('%.1e',PVAL[[n]][,5]))
+    roc(RNKS,max=n.samples,title=paste0(annotID,' - level : ',n))
+    
+  }
+  # RNKS.df <- lapply(setNames(names(ALL.RNKS), names(ALL.RNKS)), function(n){
+  #   RNKS = ALL.RNKS[[n]]
+  #   RNKS <- lapply(RNKS, function(x) {c(0, x, n.samples)})
+  #   names(RNKS) = paste0(names(RNKS),' - Pval = ',sprintf('%.1e',PVAL[[n]][,5]))
+  #   
+  #   rnk.df <- stack(RNKS)
+  #   colnames(rnk.df) <- c("rank", "pval")
+  #   rnk.df$feature <- n
+  #   
+  #   return(rnk.df)
+  # })
+  # return(do.call(rbind, RNKS.df))
+}
+
+
+# rnk.df <- recovery_plot(tmp.hmatrix, rna.annotation, "Celltype")
+# head(rnk.df)
+# library(dplyr)
+# rnk.df %>%
+#   group_by(feature, pval) %>%
+#   mutate(prop = c(0, (1:(n()-1))/(n()-1))) %>%
+#   mutate(signature = gsub(" - Pval.*", "", pval)) %>%
+#   ggplot(aes(x=rank, y=prop, color=signature)) +
+#   #geom_line() +
+#   geom_step() +
+#   geom_abline(slope = 1/max(rnk.df$rank), intercept = (1-1/4)/(max(rnk.df$rank)),linetype = 2) +
+#   facet_grid(feature ~.) +
+#   scale_color_brewer(palette = "Set1") +
+#   theme_bw()
+
+
+```
+
+

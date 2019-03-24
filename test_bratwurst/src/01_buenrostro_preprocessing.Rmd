@@ -1,0 +1,366 @@
+---
+title: "Corces-Buenrostro AML dataset preprocessing"
+author: "HDSU"
+date: "`r date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 4
+    number_sections: false
+params:
+  
+  work_dir: "~/Corces_NMF/"
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE, message=FALSE, warning=FALSE, echo=FALSE}
+#this chunk sets global options for Rmarkdown
+knitr::opts_knit$set(root.dir=params$work_dir)
+knitr::opts_chunk$set(echo = TRUE)
+options(knitr.table.format="html")
+
+library(viridis)
+library(ComplexHeatmap)
+library(DESeq2)
+
+```
+
+# Non-Negative Matrix factorization example - STAGE 1 preprocessing
+
+Preprocessing of RNAseq and ATACseq data from:
+
+**Lineage-specific and single-cell chromatin accessibility charts human hematopoiesis and leukemia evolution.**
+  
+Corces MR, Buenrostro JD, Wu B, Greenside PG, Chan SM, Koenig JL, Snyder MP, Pritchard JK, Kundaje A, Greenleaf WJ, Majeti R, Chang HY.
+
+  
+This document was rendered using the following command:
+`rmarkdown::render("src/01_buenrostro_preprocessing.Rmd", params = list(work_dir = paste0(getwd(), "/..")))`
+  
+  
+# Download data
+
+download count data from GEO
+
+## Process RNAseq data
+
+
+
+```{r RNAseqCounts,  fig.width=12, fig.height=12, out.width="90%"}
+
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                                 Set paths                                  ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+rna.data.path  <- "data/rnaseq/"
+GSE74246.path <- file.path(rna.data.path, "GSE74246_RNAseq_All_Counts.txt.gz")
+dir.create(rna.data.path, recursive = TRUE, showWarnings = FALSE)
+
+
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                               Download counts                              ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+# set ftp url to RNA-seq data
+ftp.url <- file.path("ftp://ftp.ncbi.nlm.nih.gov/geo/series/GSE74nnn/GSE74246",
+                     "/suppl/GSE74246_RNAseq_All_Counts.txt.gz")
+# download data
+if(!file.exists(GSE74246.path)){
+  download.file(url = ftp.url, GSE74246.path)
+}
+
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                        Data loading and sample QC                          ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+# read in data matrix
+rna.counts <- read.delim(gzfile(GSE74246.path), row.names = 1)
+rna.counts[1:5,1:5]
+dim(rna.counts)
+
+# remove leukemic and erythroblast samples
+rna.counts <- rna.counts[,-grep("Ery|rHSC|LSC|Blast", colnames(rna.counts))]
+dim(rna.counts)
+
+# inspect correlation matrix
+cor.dm <- cor(rna.counts)
+Heatmap(cor.dm, col = magma(100), name = "Correlation")
+rm(cor.dm)
+
+# X5852.GMP is an outlier and will be removed, 
+# has much smaller library size as other GMPS
+rna.counts <- rna.counts[,-grep("X5852.GMP", colnames(rna.counts))]
+
+# remove rows with rowSum==0
+rna.counts <- rna.counts[!rowSums(rna.counts) == 0,]
+
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                              Normalize counts                              ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+
+# do DESeq2 size factor normalization
+sf <- estimateSizeFactorsForMatrix(rna.counts)
+rna.counts <- t( t(rna.counts) / sf )
+
+# do +1 log2 transformation
+rna.norm.mat <- apply(rna.counts + 1, 2, log2)
+rm(ftp.url, GSE74246.path, sf)
+
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                              Annotation                                    ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+# extract celltypes from colnames
+col.anno <- gsub(".*\\.", "", colnames(rna.norm.mat))
+col.anno[grep("NK", col.anno)] <- "NK"
+col.anno[grep("CD4", col.anno)] <- "CD4"
+col.anno[grep("CD8", col.anno)] <- "CD8"
+
+# Define color vector
+type.color <- setNames(c("#771155", "#AA4488", "#CC99BB", "#114477", "#4477AA", "#77AADD", 
+                         "#117777", "#44AAAA", "#77CCCC", "#777711", "#AAAA44", "#DDDD77"),
+                       c("HSC", "MPP", "LMPP", "CMP", "GMP", "MEP",
+                         "CLP", "CD4", "CD8", "NK", "Bcell", "Mono"))
+
+# Annotation data frame
+rna.annot <- data.frame(sampleID = colnames(rna.norm.mat),
+                        Celltype = as.factor(col.anno),
+                        color    = type.color[match(col.anno, names(type.color))],
+                        row.names = colnames(rna.norm.mat),
+                        stringsAsFactors = FALSE)
+
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                        Save normalized matrix                              ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+saveRDS(rna.norm.mat, "data/rnaseq/rnaseq_normalized_counts.RDS")
+saveRDS(rna.annot, "data/rnaseq/rnaseq_annotation.RDS")
+
+```
+
+
+
+## Process ATACseq data
+
+```{r ATACseqCounts,  fig.width=12, fig.height=12, out.width="90%"}
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                                 Set paths                                  ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+atac.data.path  <- file.path("data/atacseq/")
+GSE74912.path <- file.path(atac.data.path, "GSE74912_ATACseq_All_Counts.txt.gz")
+dir.create(atac.data.path, recursive = TRUE, showWarnings = FALSE)
+
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                               Download counts                              ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+# download data
+if(!file.exists(GSE74912.path)){
+  download.file(url = "ftp://ftp.ncbi.nlm.nih.gov/geo/series/GSE74nnn/GSE74912/suppl/GSE74912_ATACseq_All_Counts.txt.gz", GSE74912.path)
+}
+
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                        Data loading and sample QC                          ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+# read in data matrix
+atac.counts <- read.delim(gzfile(GSE74912.path), stringsAsFactors = FALSE)
+atac.counts[1:5,1:5]
+
+# separate annotation column from data
+atac.row.anno <- atac.counts[,1:3]
+atac.counts <- atac.counts[,-c(1:3)]
+dim(atac.counts)
+
+rownames(atac.counts) <- do.call(paste, c(as.list(atac.row.anno), sep = "_"))
+
+# remove rows with rowSums < 2000
+atac.row.anno <- atac.row.anno[rowSums(atac.counts) > 2000,]
+atac.counts <- atac.counts[rowSums(atac.counts) > 2000,]
+
+# remove leukemic and erythroblast samples
+atac.counts <- atac.counts[,-grep("Ery|LSC|pHSC|Leuk|CD34", colnames(atac.counts))]
+dim(atac.counts)
+sum(rowSums(atac.counts) == 0)
+
+# compute correlation matrix
+Heatmap(cor(atac.counts), col = magma(100), name = "Correlation")
+
+# remove X6792.7A, due to low coverage
+atac.counts <- atac.counts[,-grep("X6792.7A", colnames(atac.counts))]
+
+
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                              Normalize counts                              ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+
+# do DESeq2 norm
+sf <- estimateSizeFactorsForMatrix(atac.counts)
+atac.counts <- t(t(atac.counts)/sf)
+
+# transform to log2
+atac.norm.mat <- apply(atac.counts + 1, 2, log2)
+
+
+rm(sf, GSE74912.path)
+
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                              Annotation                                    ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+# extract celltypes from colnames
+col.anno <- colnames(atac.norm.mat)
+col.anno[grep("CD4", col.anno)] <- "CD4"
+col.anno[grep("CD8", col.anno)] <- "CD8"
+col.anno[grep("NK", col.anno)] <- "NK"
+col.anno[grep("Nkcell", col.anno)] <- "NK"
+col.anno[grep("Bcell", col.anno)] <- "Bcell"
+col.anno[grep("CLP", col.anno)] <- "CLP"
+col.anno[grep("1(A|B)", col.anno)] <- "HSC"
+col.anno[grep("2(A|B)", col.anno)] <- "MPP"
+col.anno[grep("3(A|B)", col.anno)] <- "LMPP"
+col.anno[grep("4(A|B)", col.anno)] <- "CMP"
+col.anno[grep("5(A|B)", col.anno)] <- "GMP"
+col.anno[grep("6(A|B)", col.anno)] <- "MEP"
+col.anno[grep("7(A|B)", col.anno)] <- "Mono"
+col.anno
+
+# Annotation data frame
+atac.annot <- data.frame(sampleID = colnames(atac.norm.mat),
+                        Celltype = as.factor(col.anno),
+                        color    = type.color[match(col.anno, names(type.color))],
+                        row.names = colnames(atac.norm.mat),
+                        stringsAsFactors = FALSE)
+
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                        Save normalized matrix                              ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+saveRDS(atac.norm.mat, "data/atacseq/atacseq_normalized_counts.RDS")
+saveRDS(atac.annot, "data/atacseq/atacseq_annotation.RDS")
+
+```
+
+# Match samples
+
+Find samples with RNAseq and ATACseq data available
+
+```{r match_samples}
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                         Match RNAseq and ATACseq                           ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                            ATACseq annotations                             ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+
+# replace numbered celltypes by character names
+col.anno <- colnames(atac.counts)
+col.anno[grep("CD4", col.anno)] <- "CD4"
+col.anno[grep("CD8", col.anno)] <- "CD8"
+col.anno[grep("NK", col.anno)] <- "NK"
+col.anno[grep("Nkcell", col.anno)] <- "NK"
+col.anno[grep("Bcell", col.anno)] <- "Bcell"
+col.anno[grep("CLP", col.anno)] <- "CLP"
+col.anno[grep("1(A|B)", col.anno)] <- "HSC"
+col.anno[grep("2(A|B)", col.anno)] <- "MPP"
+col.anno[grep("3(A|B)", col.anno)] <- "LMPP"
+col.anno[grep("4(A|B)", col.anno)] <- "CMP"
+col.anno[grep("5(A|B)", col.anno)] <- "GMP"
+col.anno[grep("6(A|B)", col.anno)] <- "MEP"
+col.anno[grep("7(A|B)", col.anno)] <- "Mono"
+atac.anno.cellID <- col.anno
+rm(col.anno)
+
+# Paste donor ID and cell type
+atac.anno <- paste0(sapply(strsplit(colnames(atac.counts), "\\."), "[[", 1), ".", atac.anno.cellID)
+
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                             RNAseq annotations                             ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+# Keep only Donor ID
+rnaseqIDs <- setNames(sapply(strsplit(colnames(rna.counts), "\\."), "[[", 1), colnames(rna.counts))
+rnaseqIDs <- sub("^X", "", rnaseqIDs)
+
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                         Match RNAseq and ATACseq                           ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+rna.atac.matched.samples <- lapply(setNames(1:length(rnaseqIDs), names(rnaseqIDs)), function(i) {
+  # Find same donor in RNAseq and ATACseq
+  atac.matched <- grep(rnaseqIDs[i], atac.anno, value = TRUE)
+  if (length(atac.matched) > 0) {
+    # if same donor in both omics search if same cell type
+    # extract cell tupe fron RNAseq colname
+    anno <- sapply(strsplit(names(rnaseqIDs)[i], "\\."), "[[", 2)
+    anno <- sub("Tcell", "", anno)
+    anno <- sub("cell", "", anno)
+    # find in ATACseq
+    anno.matched <- grep(anno, atac.matched, value = TRUE)
+    if (anno == "MPP") {
+      anno.matched <- grep("LMPP", anno.matched, value = TRUE, invert = TRUE)
+    }
+    if (length(anno.matched) > 0) {
+      data.frame(rnaID  = names(rnaseqIDs)[i],
+                 atacID = colnames(atac.counts)[atac.anno %in% anno.matched],
+                 cellID = atac.anno.cellID[atac.anno %in% anno.matched],
+                 atac.anno = anno.matched, 
+                 row.names = colnames(atac.counts)[atac.anno %in% anno.matched])
+    }
+  }
+} )
+# Keep only matched sampels
+sum(!sapply(rna.atac.matched.samples, is.null))
+rna.atac.matched.samples <- rna.atac.matched.samples[!sapply(rna.atac.matched.samples, is.null)]
+#rna.atac.matched.samples
+
+
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                         Match RNAseq and ATACseq                           ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+# Keep only one ATACseq replicate
+rna.atac.annot <- do.call(rbind, rna.atac.matched.samples)
+rna.atac.annot <- rna.atac.annot[!duplicated(rna.atac.annot$rnaID),]
+
+# Subset intersect on multi views
+multiview.norm.mat <- list(rna  = rna.norm.mat[, match(rna.atac.annot$rnaID, colnames(rna.norm.mat))],
+                            atac = atac.norm.mat[, match(rna.atac.annot$atacID, colnames(atac.norm.mat))])
+lapply(multiview.norm.mat, dim)
+
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                   Format multi view to easy access                         ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+# Format Colnames
+lapply(multiview.norm.mat, colnames)
+colnames(multiview.norm.mat$atac) <- colnames(multiview.norm.mat$rna)
+lapply(multiview.norm.mat, colnames)
+
+# Format annotation
+rna.atac.annot$original.atacID <- rna.atac.annot$atacID
+rna.atac.annot$atacID <- rna.atac.annot$rnaID
+rownames(rna.atac.annot) <- rna.atac.annot$rnaID 
+
+
+rna.atac.annot <- rna.atac.annot[,c(2,3,1,4,5)]
+colnames(rna.atac.annot) <- c("sampleID", "Celltype", "rna.sampleID", "atac.sampleID", "original.atacID")
+
+rna.atac.annot$color <- type.color[match(rna.atac.annot$Celltype, names(type.color))]
+
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                                     Save data                              ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+dir.create("data/multiview/", recursive = TRUE)
+
+
+# Save annotation
+saveRDS(rna.atac.annot, file = "data/multiview/multiview_annotation.RDS")
+write.table(rna.atac.annot, "data/multiview/multiview_annotation.csv", quote = FALSE, sep = "\t", row.names = FALSE)
+
+# Save normalized matrices
+saveRDS(multiview.norm.mat, file = "data/multiview/multiview_norm_mat_list.RDS")
+
+# lapply(setNames(names(multiview.norm.mat), names(multiview.norm.mat)), function(viewID){
+#   write.table(multiview.norm.mat[[viewID]], paste0("data/multiview/norm_matrices/", viewID, "_norm_mat.csv"), 
+#               quote = FALSE, sep = "\t", row.names = FALSE, col.names = FALSE)
+#   writeLines(colnames(multiview.norm.mat[[viewID]]), paste0("data/multiview/norm_matrices/", viewID, "_colnames.csv"))
+#   writeLines(rownames(multiview.norm.mat[[viewID]]), paste0("data/multiview/norm_matrices/", viewID, "_rownames.csv"))
+#   viewID
+# })
+
+
+
+
+```
+
