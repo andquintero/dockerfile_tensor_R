@@ -141,7 +141,7 @@ Minize the Frobenius error, the coefficient of variation and the mean Amari dist
 ### H Matrix, W normalized:  {.tabset}  
   
   
-```{r rna_Hmatrix_Wnorm, fig.width=8, fig.height=5.5, out.width="90%", results='asis', warning=FALSE}
+```{r rna_Hmatrix_Wnorm, fig.width=8, fig.height=5.5, out.width="90%", results='asis', warning=FALSE, message=FALSE}
 ##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
 ##                        H matrix heatmap annotation                         ##
 ##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
@@ -298,7 +298,7 @@ Minize the Frobenius error, the coefficient of variation and the mean Amari dist
 ### H Matrix, W normalized:  {.tabset}  
   
   
-```{r atac_Hmatrix_Wnorm, fig.width=8, fig.height=5.5, out.width="90%", results='asis', warning=FALSE}
+```{r atac_Hmatrix_Wnorm, fig.width=8, fig.height=5.5, out.width="90%", results='asis', warning=FALSE, message=FALSE}
 ##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
 ##                        H matrix heatmap annotation                         ##
 ##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##

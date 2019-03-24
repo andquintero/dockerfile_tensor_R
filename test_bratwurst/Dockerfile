@@ -27,8 +27,8 @@ RUN mkdir -p /home/hdsu/.rstudio/monitored/user-settings/ && echo "uiPrefs={\"th
   /home/hdsu/.rstudio/monitored/user-settings/user-settings
 
 
-COPY --chown=hdsu data /home/hdsu/Corces_NMF/data
-COPY --chown=hdsu src /home/hdsu/Corces_NMF/src
+COPY --chown=hdsu /test_bratwurst/data /home/hdsu/Corces_NMF/data
+COPY --chown=hdsu /test_bratwurst/src /home/hdsu/Corces_NMF/src
 
 
 
