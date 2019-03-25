@@ -4,6 +4,7 @@ LABEL maintainer="Andres Quintero a.quintero@dkfz-heidelberg.de"
 
 
 RUN R -e "devtools::install_github('andquintero/bratwurst', ref='dev_hdsu')"
+
     
 #updated convergence in NMF
 #docker build -t bratwurst_tensor2 .
