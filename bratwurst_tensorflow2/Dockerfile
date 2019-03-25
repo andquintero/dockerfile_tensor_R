@@ -3,7 +3,7 @@ FROM andresquintero/r_tensorflow2
 LABEL maintainer="Andres Quintero a.quintero@dkfz-heidelberg.de"
 
 
-RUN R -e "devtools::install_github('andquintero/bratwurst', ref='dev_hdsu')"
+RUN R -e "devtools::install_github('andquintero/bratwurst',  ref='dev_hdsu') "
 
     
 #updated convergence in NMF
