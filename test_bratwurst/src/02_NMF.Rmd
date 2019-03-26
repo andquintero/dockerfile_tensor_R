@@ -97,7 +97,6 @@ rna.nmf.exp <- runNMFtensor(rna.nmf.exp,
                             k.max = k.max, 
                             outer.iter = outer.iter, 
                             inner.iter = inner.iter, 
-                            conver.test.niter = 10, 
                             conver.test.stop.threshold = 40)
 
 
@@ -254,7 +253,6 @@ atac.nmf.exp <- runNMFtensor(atac.nmf.exp,
                             k.max = k.max, 
                             outer.iter = outer.iter, 
                             inner.iter = inner.iter, 
-                            conver.test.niter = 10, 
                             conver.test.stop.threshold = 40)
 
 
