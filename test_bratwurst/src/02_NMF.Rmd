@@ -230,7 +230,7 @@ Factorization parameters:
 ##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
 k.min <- 8
 k.max <- 10
-outer.iter <- 10
+outer.iter <- 5
 inner.iter <- 2*10^4
 
 kable(data.frame(c(k.min, k.max, outer.iter, inner.iter), 
@@ -337,6 +337,175 @@ for(ki in names(atac.norm.nmf.exp@HMatrixList)) {
   cat("  \n Recovery plots for k=",  ki, "  \n  ")
   
   recovery_plot(tmp.hmatrix, atac.annotation, "Celltype")
+  
+  }
+
+
+gc()
+```
+
+
+## Integrative RNAseq & ATACseq
+
+**Gene expression (RNAseq) & Chromatin accessibility (ATACseq)**
+
+Only the those samples with RNAseq and ATACseq data were used in the integrative analysis.
+
+### Data loading
+  
+Read normalized gene expression matrix and chromatin accessibility matrix...
+  
+```{r integrative_dataloading, results="asis", message=FALSE}
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                         Read normalized data                               ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+# read normalized matrix
+int.norm.mat <- readRDS("data/multiview/multiview_norm_mat_list.RDS")
+int.annotation <- readRDS("data/multiview/multiview_annotation.RDS")
+
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                          Print dataset dimension                           ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+cat("Dimension of transcriptome dataset (RNAseq):  \n\n  ") 
+kable(data.frame(dim(int.norm.mat$rna), row.names = c("features", "samples")), 
+      col.names = "") 
+
+cat("Dimension of Chromatin accessibility dataset (ATACseq):  \n\n  ") 
+kable(data.frame(dim(int.norm.mat$atac), row.names = c("features", "samples")), 
+      col.names = "") 
+
+```
+
+
+### Applying integrative NMF
+
+Applying Integrative Non-Negative Matrix Factorization (NMF) to normalized Gene expression (RNAseq) and  Chromatin accessibility data (ATACseq) 
+
+Factorization parameters:
+  
+```{r integrative_NMF_param, results="asis"}
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##              Parameters to run NMF in GPUs using  pythonCuda               ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+k.min <- 8
+k.max <- 10
+outer.iter <- 5
+inner.iter <- 2*10^4
+
+kable(data.frame(c(k.min, k.max, outer.iter, inner.iter), 
+                 row.names = c("k.min", "k.max", "outer.iter", "inner.iter")), 
+      col.names = "") 
+
+```
+
+
+
+```{r integrative_NMF_run, message=FALSE, warning=FALSE, cache=TRUE}
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##              Create nmf experiment object and run NMF                      ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+int.nmf.exp <- run_integrative_NMF_tensor(int.norm.mat, 
+                                          k_min = k.min, 
+                                          k_max = k.max, 
+                                          outer_iter = outer.iter, 
+                                          inner_iter = inner.iter, 
+                                          conver_stop_threshold = 40, 
+                                          lambda=1)
+
+
+```
+ 
+ 
+### Factorization quality metrics and optimal K   {.tabset}  
+
+Based on the results of the factorization quality metrics, an optimal number of signatures (k) must be chosen:
+  
+#### RNAseq  
+  
+```{r integrative_rna_NMF_optK, results='hide',fig.keep='all', message=FALSE, warning=FALSE}
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                RNAseq - Plot K stats - River plot                          ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+
+## Plot K stats
+gg.optKr <- my.plotKstats(int.nmf.exp@view_specific_NMFexp_list$rna, "RNAseq factorization quality metrics")
+gg.optKr
+
+## Generate river plot
+river <- generateRiverplot(int.nmf.exp@view_specific_NMFexp_list$rna)
+plot(river, plot_area=1, yscale=0.6, nodewidth=0.5)
+
+
+```
+  
+#### ATACseq  
+  
+```{r integrative_atac_NMF_optK, results='hide',fig.keep='all', message=FALSE, warning=FALSE}
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                ATACseq - Plot K stats - River plot                         ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+
+## Plot K stats
+gg.optKr <- my.plotKstats(int.nmf.exp@view_specific_NMFexp_list$atac, "ATACseq factorization quality metrics")
+gg.optKr
+
+## Generate river plot
+river <- generateRiverplot(int.nmf.exp@view_specific_NMFexp_list$atac)
+plot(river, plot_area=1, yscale=0.6, nodewidth=0.5)
+
+```
+
+Minize the Frobenius error, the coefficient of variation and the mean Amari distance, while maximizing the sum and mean silhouette width and the cophenic coefficient.
+  
+### H Matrices:  {.tabset}  
+  
+  
+```{r integrative_Hmatrix_Wnorm, fig.width=12, fig.height=4, out.width="90%", results='asis', warning=FALSE, message=FALSE}
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                        H matrix heatmap annotation                         ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+#Annotation for H matrix heatmap
+# Define color vector
+type.colVector <- list(Celltype = setNames(int.annotation$color[match(levels(int.annotation$Celltype), int.annotation$Celltype)],
+         levels(int.annotation$Celltype))
+)
+
+# Build Heatmap annotation
+heat.anno <- HeatmapAnnotation(df = data.frame(Celltype = int.annotation$Celltype),
+                               col = type.colVector,
+                               show_annotation_name = FALSE, na_col = "white")
+
+
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##              Generate H matrix heatmap, W normalized                       ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+for(ki in k.min:k.max) {
+  cat("\n")
+  #cat("  \n#### H matrix for k=",  ki, "  {.tabset}   \n  ")
+  cat("  \n#### H matrix for k=",  ki, "  {.tabset}    \n  ")
+  #plot H matrix
+  cat("\n")
+  cat("  \n##### scaled  \n  ")
+  plotH_oneView(int.nmf.exp, k = ki, heat.anno = heat.anno, 
+                scale_color = TRUE, viewID = "rna", displayID = "RNAseq")
+  plotH_oneView(int.nmf.exp, k = ki, heat.anno = heat.anno, 
+                scale_color = TRUE, viewID = "atac", displayID = "ATACseq")
+  
+  cat("\n")
+  cat("  \n##### not scaled  \n  ")
+  plotH_oneView(int.nmf.exp, k = ki, heat.anno = heat.anno, 
+                scale_color = FALSE, viewID = "rna", displayID = "RNAseq")
+  plotH_oneView(int.nmf.exp, k = ki, heat.anno = heat.anno, 
+                scale_color = FALSE, viewID = "atac", displayID = "ATACseq")
+  
+  # cat("  \n Recovery plots for k=",  ki, "  \n  ")
+  # # Find best shared matrix, according to factorization metrics
+  # k <- paste0("k", ki)
+  # top_idx <- int.nmf.exp@best_factorization_idx
+  # idx <- top_idx[match(k, names(top_idx))]
+  # sharedH <- int.nmf.exp@shared_HMatrix_list[[k]][[idx]]
+  # # Make recovery plots
+  # recovery_plot(sharedH, int.annotation, "Celltype")
   
   }
 
@@ -515,7 +684,75 @@ recovery_plot <- function(h, annot, annotID){
 #   scale_color_brewer(palette = "Set1") +
 #   theme_bw()
 
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                    Plot H matrix heatmap integrative NMF                   ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+
+
+plotH_oneView <- function(int_nmf, viewID, k, heat.anno, col=viridis(100), 
+                          scale_color=TRUE, displayID = viewID){
+  # Find which iteration returned the best results
+  
+  k <- paste0("k", k)
+  top_idx <- int_nmf@best_factorization_idx
+  idx <- top_idx[match(k, names(top_idx))]
+  
+  sharedH <- int_nmf@shared_HMatrix_list[[k]][[idx]]
+  Hview   <- int_nmf@view_specific_HMatrix_list[[k]][[idx]][[viewID]]
+  
+  # Define total H matrix
+  totalH <- sharedH + Hview
+  # Color Function
+  if (scale_color) {
+    colf <- circlize::colorRamp2(seq(0, max(totalH), length.out = 100), col)
+  } else {
+    colf <- col
+  }
+  
+  main_hist <- hclust(as.dist(1 - cor(totalH, method = "pearson")))
+  
+  tH.heatmap <- Heatmap(totalH,
+                        col = colf,
+                        name = "Total Exposure",
+                        column_title = "Total H matrix",
+                        cluster_columns = main_hist,
+                        show_column_dend = TRUE,
+                        top_annotation = heat.anno, 
+                        show_column_names = FALSE,
+                        show_row_names = FALSE,
+                        cluster_rows = FALSE)
+  
+  sH.heatmap <- Heatmap(sharedH,
+                        col = colf,
+                        name = "Shared Exposure",
+                        column_title = "Shared H matrix",
+                        cluster_columns = main_hist,
+                        show_column_dend = TRUE,
+                        top_annotation = heat.anno,
+                        show_column_names = FALSE,
+                        show_row_names = FALSE,
+                        cluster_rows = FALSE)
+  
+  vH.heatmap <- Heatmap(Hview,
+                        col = colf,
+                        name = "View Specific Exposure",
+                        column_title = "View specific H matrix",
+                        cluster_columns = main_hist,
+                        show_column_dend = TRUE,
+                        top_annotation = heat.anno,
+                        show_column_names = FALSE,
+                        show_row_names = FALSE,
+                        cluster_rows = FALSE)
+  #print(tH.heatmap + sH.heatmap + vH.heatmap)
+  
+  
+  ht_global_opt(heatmap_legend_grid_height = unit(.25, "cm"))
+  ht_list <- tH.heatmap + sH.heatmap + vH.heatmap
+  draw(ht_list, row_title = displayID)
+  ht_global_opt(RESET = TRUE)
+}
+
+
 
 ```
-
 
