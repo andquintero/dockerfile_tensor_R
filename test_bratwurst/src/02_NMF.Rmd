@@ -410,7 +410,7 @@ int.nmf.exp <- run_integrative_NMF_tensor(int.norm.mat,
                                           outer_iter = outer.iter, 
                                           inner_iter = inner.iter, 
                                           conver_stop_threshold = 40, 
-                                          lambda=1)
+                                          lambda=0.7)
 
 
 ```
@@ -485,33 +485,76 @@ for(ki in k.min:k.max) {
   cat("  \n#### H matrix for k=",  ki, "  {.tabset}    \n  ")
   #plot H matrix
   cat("\n")
-  cat("  \n##### scaled  \n  ")
-  plotH_oneView(int.nmf.exp, k = ki, heat.anno = heat.anno, 
-                scale_color = TRUE, viewID = "rna", displayID = "RNAseq")
-  plotH_oneView(int.nmf.exp, k = ki, heat.anno = heat.anno, 
-                scale_color = TRUE, viewID = "atac", displayID = "ATACseq")
-  
-  cat("\n")
   cat("  \n##### not scaled  \n  ")
   plotH_oneView(int.nmf.exp, k = ki, heat.anno = heat.anno, 
                 scale_color = FALSE, viewID = "rna", displayID = "RNAseq")
   plotH_oneView(int.nmf.exp, k = ki, heat.anno = heat.anno, 
                 scale_color = FALSE, viewID = "atac", displayID = "ATACseq")
   
-  # cat("  \n Recovery plots for k=",  ki, "  \n  ")
-  # # Find best shared matrix, according to factorization metrics
-  # k <- paste0("k", ki)
-  # top_idx <- int.nmf.exp@best_factorization_idx
-  # idx <- top_idx[match(k, names(top_idx))]
-  # sharedH <- int.nmf.exp@shared_HMatrix_list[[k]][[idx]]
-  # # Make recovery plots
-  # recovery_plot(sharedH, int.annotation, "Celltype")
+  cat("\n")
+  cat("  \n##### scaled  \n  ")
+  plotH_oneView(int.nmf.exp, k = ki, heat.anno = heat.anno, 
+                scale_color = TRUE, viewID = "rna", displayID = "RNAseq")
+  plotH_oneView(int.nmf.exp, k = ki, heat.anno = heat.anno, 
+                scale_color = TRUE, viewID = "atac", displayID = "ATACseq")
   
   }
 
 
 
 ```
+
+
+## iNMF Recovery plots:  {.tabset}  
+  
+  
+```{r integrative_recovery, fig.width=8, fig.height=5, out.width="90%", results='asis', warning=FALSE, message=FALSE}
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##              Generate H matrix recovery plots                              ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+rownames(int.annotation) <- int.annotation$sampleID
+int.annotation$Celltype <- factor(int.annotation$Celltype, levels = unique(int.annotation$Celltype))
+
+for(ki in k.min:k.max) {
+  cat("\n")
+  #cat("  \n#### H matrix for k=",  ki, "  {.tabset}   \n  ")
+  cat("  \n### Recovery plots for k=",  ki, "   {.tabset}      \n  ")
+  #plot H matrix
+  
+  # Find best shared matrix, according to factorization metrics
+  k <- paste0("k", ki)
+  top_idx <- int.nmf.exp@best_factorization_idx
+  idx <- top_idx[match(k, names(top_idx))]
+  
+  cat("\n")
+  cat("  \n#### Shared H Matrix      \n  ")
+  sharedH <- int.nmf.exp@shared_HMatrix_list[[k]][[idx]]
+  colnames(sharedH) <- int.annotation$sampleID
+  # Make recovery plots
+  recovery_plot(sharedH, int.annotation, "Celltype")
+  
+  cat("\n")
+  cat("  \n#### RNAseq H Matrix      \n  ")
+  viewH <- int.nmf.exp@view_specific_HMatrix_list[[k]][[idx]]$rna
+  colnames(viewH) <- int.annotation$sampleID
+  # Make recovery plots
+  recovery_plot(viewH, int.annotation, "Celltype")
+  
+  cat("\n")
+  cat("  \n#### ATACseq H Matrix      \n  ")
+  viewH <- int.nmf.exp@view_specific_HMatrix_list[[k]][[idx]]$atac
+  colnames(viewH) <- int.annotation$sampleID
+  # Make recovery plots
+  recovery_plot(viewH, int.annotation, "Celltype")
+  
+  }
+
+
+
+```
+
+
+
 
 
 ```{r helper_functions}
