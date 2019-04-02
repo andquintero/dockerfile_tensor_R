@@ -8,33 +8,247 @@ output:
     toc_float: true
     toc_depth: 4
     number_sections: false
+    code_folding: show
 params:
   work_dir: "~/Corces_NMF"
 editor_options: 
-  chunk_output_type: console
+  chunk_output_type: inline
 ---
-
 
 
 ```{r setup, include=FALSE, message=FALSE, warning=FALSE, echo=FALSE}
 #this chunk sets global options for Rmarkdown
 knitr::opts_knit$set(root.dir=params$work_dir)
-knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(echo = TRUE)
 options(knitr.table.format="html")
-
+setwd(params$work_dir)
 library(Bratwurst)
 library(ggplot2)
 library(viridis)
 library(ComplexHeatmap)
+library(gage)
 
-
+library(DT)
 library(knitr)
 
 ```
 
+
 # NMF on Gene expression and Chromatin accessibility data  
 
 ```{r helper_functions}
+# Helper functions 
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                            Compute K stats and                             ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+## Estimate K stats
+my.kstats <- function(NMFexperiment){
+  # calc different k stats
+  NMFexperiment <- computeFrobErrorStats(NMFexperiment)
+  NMFexperiment <- computeSilhoutteWidth(NMFexperiment)
+  NMFexperiment <- computeCopheneticCoeff(NMFexperiment)
+  NMFexperiment <- computeAmariDistances(NMFexperiment)
+  return(NMFexperiment)
+}
+
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                            Plot K stats                                    ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+my.plotKstats <- function(NMFexperiment, title){
+  # visualize k stats
+  gg.optKr <- plotKStats(NMFexperiment)
+  gg.optKr <- gg.optKr + theme_bw() + 
+    ggtitle(title) +
+    theme(plot.title=element_text(hjust=0.5))
+  return(gg.optKr)
+}
+
+
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                          Plot H matrix heatmap                             ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+
+my.plotHMatrices <- function(NMFexperiment, heat.anno, col=viridis(n=100)){
+  for(ki in names(NMFexperiment@HMatrixList)) {
+  cat("\n")
+  cat("  \n#### H matrix for k=",  ki, "  \n  ")
+  #plot H matrix
+  tmp.hmatrix <- HMatrix(NMFexperiment, k = ki)
+  colnames(tmp.hmatrix) <- colnames(NMFexperiment)
+  h.heatmap <- Heatmap(tmp.hmatrix,
+                       col = col,
+                       name = "Exposure",
+                       clustering_distance_columns = 'pearson',
+                       show_column_dend = TRUE,
+                       heatmap_legend_param = 
+                         list(color_bar = "continuous", legend_height=unit(2, "cm")),
+                       top_annotation = heat.anno,
+                       show_column_names = TRUE,
+                       show_row_names = FALSE,
+                       cluster_rows = FALSE)
+  print(h.heatmap)
+  }
+}
+#my.plotHMatrices(rna.norm.nmf.exp, heat.anno)
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                      Recovery plots functions                              ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+
+auc <- function(rnk.list,max=NULL) {
+  aux = sapply(rnk.list,function(rnk) {
+    if (is.null(max)) {max = max(rnk)} 
+    rnk = sort(rnk)
+    X = 0
+    i = 1
+    ngenes = length(rnk)
+    while ((rnk[i] <= max) && (i <= length(rnk))) {X = X + max -rnk[i];i = i+1}
+    rauc = X/(i-1)/max
+    return(rauc)
+  })
+  return(aux)
+}
+
+roc <- function(rnk.list,max=NULL,title=NULL) {
+  require(RColorBrewer)
+  col = brewer.pal(length(rnk.list),'Set1')
+  rnk = c(1,rnk.list[[1]])
+  if (is.null(max)) {max = max(rnk)} else {rnk=c(rnk,max)}
+  plot(rnk,(1:length(rnk))/length(rnk),type='s',col=col[1],lwd=3,main=title,ylab='',xlab='Ranks')
+  for (i in 2:length(rnk.list)) {
+    rnk = c(1,rnk.list[[i]])
+    if (is.null(max)) {max = max(rnk)} else {rnk=c(rnk,max)}
+    lines(rnk,(1:length(rnk))/length(rnk),type='s',col=col[i],lwd=3)
+  }
+  L = length(rnk.list[[1]])
+  abline(1/L,(1-1/L)/(max),lty=2,lwd=2,col='darkgrey')
+  legend('bottomright',legend = names(rnk.list),col=col,lwd=3)
+}
+
+recovery_plot <- function(h, annot, annotID){
+  which.a = annotID
+  annot.factor <- annot[,annotID]
+  
+  n.samples = nrow(annot)
+  
+  ALL.RNKS = lapply(levels(annot.factor),function(l) {
+  RNKS=lapply(1:nrow(h),function(i) {
+    exp = sort(h[i,],decreasing=TRUE)
+    i.rnk = match(rownames(annot)[annot.factor==l],names(exp))
+    i.rnk = sort(i.rnk[!is.na(i.rnk)])
+    return(i.rnk)
+  })
+  names(RNKS) = paste0('Sig ',1:length(RNKS))
+  return(RNKS)
+  })
+    names(ALL.RNKS) = levels(annot.factor)
+    
+    AUC.RAND = lapply(ALL.RNKS,function(r) {
+    do.call('rbind',lapply(r, function(x) {
+      ##
+      l = lapply(1:500,function(i) {
+        sample(1:n.samples,length(x))
+      })
+      aux = auc(l,max=n.samples)
+      return(c(mean(aux),sd(aux)))
+    }))
+      })
+  
+  AUC = lapply(ALL.RNKS,auc,max=n.samples)
+  
+  
+  PVAL = lapply(1:length(AUC),function(i) {
+    x = data.frame(AUC.RAND[[i]],AUC[[i]])
+    colnames(x) = c('mean','sd','val')
+    z = (x[,3]-x[,1])/x[,2]
+    p = ifelse(z>0,pnorm(z,lower.tail=FALSE),pnorm(z))
+    x$z = z
+    x$p = p
+    return(x)
+  })
+  names(PVAL) = names(AUC)
+  
+  
+  for (n in names(ALL.RNKS)) {
+    cat("\n")
+    cat("  \n##### ",  n, "  \n  ")
+    #print(n)
+    RNKS = ALL.RNKS[[n]]
+    names(RNKS) = paste0(names(RNKS),' - Pval = ',sprintf('%.1e',PVAL[[n]][,5]))
+    roc(RNKS,max=n.samples,title=paste0(annotID,' - level : ',n))
+    
+  }
+}
+
+
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                    Plot H matrix heatmap integrative NMF                   ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+
+
+plotH_oneView <- function(int_nmf, viewID, k, heat.anno, col=viridis(100), 
+                          scale_color=TRUE, displayID = viewID){
+  # Find which iteration returned the best results
+  
+  k <- paste0("k", k)
+  top_idx <- int_nmf@best_factorization_idx
+  idx <- top_idx[match(k, names(top_idx))]
+  
+  sharedH <- int_nmf@shared_HMatrix_list[[k]][[idx]]
+  Hview   <- int_nmf@view_specific_HMatrix_list[[k]][[idx]][[viewID]]
+  
+  # Define total H matrix
+  totalH <- sharedH + Hview
+  # Color Function
+  if (scale_color) {
+    colf <- circlize::colorRamp2(seq(0, max(totalH), length.out = 100), col)
+  } else {
+    colf <- col
+  }
+  
+  main_hist <- hclust(as.dist(1 - cor(totalH, method = "pearson")))
+  
+  tH.heatmap <- Heatmap(totalH,
+                        col = colf,
+                        name = "Total Exposure",
+                        column_title = "Total H matrix",
+                        cluster_columns = main_hist,
+                        show_column_dend = TRUE,
+                        top_annotation = heat.anno, 
+                        show_column_names = FALSE,
+                        show_row_names = FALSE,
+                        cluster_rows = FALSE)
+  
+  sH.heatmap <- Heatmap(sharedH,
+                        col = colf,
+                        name = "Shared Exposure",
+                        column_title = "Shared H matrix",
+                        cluster_columns = main_hist,
+                        show_column_dend = TRUE,
+                        top_annotation = heat.anno,
+                        show_column_names = FALSE,
+                        show_row_names = FALSE,
+                        cluster_rows = FALSE)
+  
+  vH.heatmap <- Heatmap(Hview,
+                        col = colf,
+                        name = "View Specific Exposure",
+                        column_title = "View specific H matrix",
+                        cluster_columns = main_hist,
+                        show_column_dend = TRUE,
+                        top_annotation = heat.anno,
+                        show_column_names = FALSE,
+                        show_row_names = FALSE,
+                        cluster_rows = FALSE)
+  #print(tH.heatmap + sH.heatmap + vH.heatmap)
+  
+  
+  ht_global_opt(heatmap_legend_grid_height = unit(.25, "cm"))
+  ht_list <- tH.heatmap + sH.heatmap + vH.heatmap
+  draw(ht_list, row_title = displayID)
+  ht_global_opt(RESET = TRUE)
+}
+
+
 ```
 
 ## Gene expression (RNAseq)
@@ -188,6 +402,70 @@ for(ki in names(rna.norm.nmf.exp@HMatrixList)) {
 
 
 
+
+
+```
+
+### Gene set enrichment analysis
+
+Using the feature exposure extracted from the W matrix, a gene set enrichment analysis is perform agains all MSigDB terms
+
+The optimal factorization rank selected was: **K = 9**
+
+
+```{r rna_gsea, results="asis", message=FALSE}
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                              W matrix Z scores                             ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+rna.wmatrix <- WMatrix(rna.norm.nmf.exp, k = 9)
+rownames(rna.wmatrix) <- rownames(rna.norm.nmf.exp)
+
+#Zscore for each signature
+rna.wmatrix.zscores <- apply(rna.wmatrix, MARGIN=2, function(wmat_score){
+  (wmat_score - median(wmat_score)) / mad(wmat_score)
+})
+colnames(rna.wmatrix.zscores) <- paste0("Zscore_Sign", 1:9)
+
+
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##         GAGE (Generally Applicable Gene-set Enrichment) analysis           ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+#Infer gene sets tha are significantly pertubed relative to all genes considered
+#load precompiled GSEA MSigDB gene sets
+gs.msigDB <- readList("db/msigdb.v6.2.symbols.gmt")
+# head(gs.msigDB)
+
+#run GAGE analysis
+rna.msigDB.enrichment <- gage(rna.wmatrix.zscores, gsets=gs.msigDB, same.dir=TRUE)
+
+#Drop NAs for upregulated
+rna.msigDB.enrichment <- as.data.frame(rna.msigDB.enrichment$greater)
+rna.msigDB.enrichment <- rna.msigDB.enrichment[!is.na(rna.msigDB.enrichment$p.geomean),]
+rna.msigDB.enrichment <- rna.msigDB.enrichment[, paste0("Zscore_Sign", 1:9)]
+
+# Select only more enriched terms in one signature compared to the others
+idx <- apply(rna.msigDB.enrichment, 1, function(term){
+  term <- -log10(term)
+  # Change 0 to small value to avoid NAs
+  term[term == 0] <- 1e-40
+  # find if this term is more enriched in one signature compared to others
+  is.enrich <- sapply(term, function(x){
+    # p-value 5 times greater than at least 5 other signatures
+    sum(x/term > 5) > 5
+  })
+  any(is.enrich)
+})
+
+rna.msigDB.enrichment <- rna.msigDB.enrichment[idx,]
+
+# Print table
+datatable(rna.msigDB.enrichment, filter="top",
+          extensions = 'Buttons',
+          options = list(dom = 'Bfrtip',
+                         buttons = list(list(extend = 'collection',
+                                             buttons = c('excel', 'csv'),
+                                             text = 'DOWNLOAD DATA')))) %>%
+  formatSignif(columns=colnames(rna.msigDB.enrichment), digits=3)
 
 
 ```
@@ -504,6 +782,73 @@ for(ki in k.min:k.max) {
 
 ```
 
+### Gene set enrichment analysis
+
+Using the feature exposure extracted from the W matrix, a gene set enrichment analysis is perform agains all MSigDB terms
+
+The optimal factorization rank selected was: **K = 9**
+
+
+```{r integrative_gsea, results="asis", message=FALSE}
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##                              W matrix Z scores                             ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+idx <- int.nmf.exp@best_factorization_idx
+idx <- idx[names(idx) == "k9"]
+
+int.rna.wmatrix <- int.nmf.exp@view_specific_WMatrix_list$k9[[idx]]$rna
+rownames(int.rna.wmatrix) <- rownames(int.norm.mat$rna)
+
+#Zscore for each signature
+int.rna.wmatrix.zscores <- apply(int.rna.wmatrix, MARGIN=2, function(wmat_score){
+  (wmat_score - median(wmat_score)) / mad(wmat_score)
+})
+colnames(int.rna.wmatrix.zscores) <- paste0("Zscore_Sign", 1:9)
+
+
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+##         GAGE (Generally Applicable Gene-set Enrichment) analysis           ##
+##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
+#Infer gene sets tha are significantly pertubed relative to all genes considered
+#load precompiled GSEA MSigDB gene sets
+gs.msigDB <- readList("db/msigdb.v6.2.symbols.gmt")
+# head(gs.msigDB)
+
+#run GAGE analysis
+int.rna.msigDB.enrichment <- gage(int.rna.wmatrix.zscores, gsets=gs.msigDB, same.dir=TRUE)
+
+#Drop NAs for upregulated
+int.rna.msigDB.enrichment <- as.data.frame(int.rna.msigDB.enrichment$greater)
+int.rna.msigDB.enrichment <- int.rna.msigDB.enrichment[!is.na(int.rna.msigDB.enrichment$p.geomean),]
+int.rna.msigDB.enrichment <- int.rna.msigDB.enrichment[, paste0("Zscore_Sign", 1:9)]
+
+# Select only more enriched terms in one signature compared to the others
+idx <- apply(int.rna.msigDB.enrichment, 1, function(term){
+  term <- -log10(term)
+  # Change 0 to small value to avoid NAs
+  term[term == 0] <- 1e-40
+  # find if this term is more enriched in one signature compared to others
+  is.enrich <- sapply(term, function(x){
+    # p-value 5 times greater than at least 5 other signatures
+    sum(x/term > 5) > 5
+  })
+  any(is.enrich)
+})
+
+int.rna.msigDB.enrichment <- int.rna.msigDB.enrichment[idx,]
+
+# Print table
+datatable(int.rna.msigDB.enrichment, filter="top",
+          extensions = 'Buttons',
+          options = list(dom = 'Bfrtip',
+                         buttons = list(list(extend = 'collection',
+                                             buttons = c('excel', 'csv'),
+                                             text = 'DOWNLOAD DATA')))) %>%
+  formatSignif(columns=colnames(int.rna.msigDB.enrichment), digits=3)
+
+
+```
+
 
 ## iNMF Recovery plots:  {.tabset}  
   
@@ -555,247 +900,4 @@ for(ki in k.min:k.max) {
 
 
 
-
-
-```{r helper_functions}
-##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
-##                            Compute K stats and                             ##
-##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
-## Estimate K stats
-my.kstats <- function(NMFexperiment){
-  # calc different k stats
-  NMFexperiment <- computeFrobErrorStats(NMFexperiment)
-  NMFexperiment <- computeSilhoutteWidth(NMFexperiment)
-  NMFexperiment <- computeCopheneticCoeff(NMFexperiment)
-  NMFexperiment <- computeAmariDistances(NMFexperiment)
-  return(NMFexperiment)
-}
-
-##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
-##                            Plot K stats                                    ##
-##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
-my.plotKstats <- function(NMFexperiment, title){
-  # visualize k stats
-  gg.optKr <- plotKStats(NMFexperiment)
-  gg.optKr <- gg.optKr + theme_bw() + 
-    ggtitle(title) +
-    theme(plot.title=element_text(hjust=0.5))
-  return(gg.optKr)
-}
-
-
-##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
-##                          Plot H matrix heatmap                             ##
-##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
-
-my.plotHMatrices <- function(NMFexperiment, heat.anno, col=viridis(n=100)){
-  for(ki in names(NMFexperiment@HMatrixList)) {
-  cat("\n")
-  cat("  \n#### H matrix for k=",  ki, "  \n  ")
-  #plot H matrix
-  tmp.hmatrix <- HMatrix(NMFexperiment, k = ki)
-  colnames(tmp.hmatrix) <- colnames(NMFexperiment)
-  h.heatmap <- Heatmap(tmp.hmatrix,
-                       col = col,
-                       name = "Exposure",
-                       clustering_distance_columns = 'pearson',
-                       show_column_dend = TRUE,
-                       heatmap_legend_param = 
-                         list(color_bar = "continuous", legend_height=unit(2, "cm")),
-                       top_annotation = heat.anno,
-                       show_column_names = TRUE,
-                       show_row_names = FALSE,
-                       cluster_rows = FALSE)
-  print(h.heatmap)
-  }
-}
-#my.plotHMatrices(rna.norm.nmf.exp, heat.anno)
-##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
-##                      Recovery plots functions                              ##
-##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
-
-auc <- function(rnk.list,max=NULL) {
-  aux = sapply(rnk.list,function(rnk) {
-    if (is.null(max)) {max = max(rnk)} 
-    rnk = sort(rnk)
-    X = 0
-    i = 1
-    ngenes = length(rnk)
-    while ((rnk[i] <= max) && (i <= length(rnk))) {X = X + max -rnk[i];i = i+1}
-    rauc = X/(i-1)/max
-    return(rauc)
-  })
-  return(aux)
-}
-
-roc <- function(rnk.list,max=NULL,title=NULL) {
-  require(RColorBrewer)
-  col = brewer.pal(length(rnk.list),'Set1')
-  rnk = c(1,rnk.list[[1]])
-  if (is.null(max)) {max = max(rnk)} else {rnk=c(rnk,max)}
-  plot(rnk,(1:length(rnk))/length(rnk),type='s',col=col[1],lwd=3,main=title,ylab='',xlab='Ranks')
-  for (i in 2:length(rnk.list)) {
-    rnk = c(1,rnk.list[[i]])
-    if (is.null(max)) {max = max(rnk)} else {rnk=c(rnk,max)}
-    lines(rnk,(1:length(rnk))/length(rnk),type='s',col=col[i],lwd=3)
-  }
-  L = length(rnk.list[[1]])
-  abline(1/L,(1-1/L)/(max),lty=2,lwd=2,col='darkgrey')
-  legend('bottomright',legend = names(rnk.list),col=col,lwd=3)
-}
-
-recovery_plot <- function(h, annot, annotID){
-  which.a = annotID
-  annot.factor <- annot[,annotID]
-  
-  n.samples = nrow(annot)
-  
-  ALL.RNKS = lapply(levels(annot.factor),function(l) {
-  RNKS=lapply(1:nrow(h),function(i) {
-    exp = sort(h[i,],decreasing=TRUE)
-    i.rnk = match(rownames(annot)[annot.factor==l],names(exp))
-    i.rnk = sort(i.rnk[!is.na(i.rnk)])
-    return(i.rnk)
-  })
-  names(RNKS) = paste0('Sig ',1:length(RNKS))
-  return(RNKS)
-  })
-    names(ALL.RNKS) = levels(annot.factor)
-    
-    AUC.RAND = lapply(ALL.RNKS,function(r) {
-    do.call('rbind',lapply(r, function(x) {
-      ##
-      l = lapply(1:500,function(i) {
-        sample(1:n.samples,length(x))
-      })
-      aux = auc(l,max=n.samples)
-      return(c(mean(aux),sd(aux)))
-    }))
-      })
-  
-  AUC = lapply(ALL.RNKS,auc,max=n.samples)
-  
-  
-  PVAL = lapply(1:length(AUC),function(i) {
-    x = data.frame(AUC.RAND[[i]],AUC[[i]])
-    colnames(x) = c('mean','sd','val')
-    z = (x[,3]-x[,1])/x[,2]
-    p = ifelse(z>0,pnorm(z,lower.tail=FALSE),pnorm(z))
-    x$z = z
-    x$p = p
-    return(x)
-  })
-  names(PVAL) = names(AUC)
-  
-  
-  for (n in names(ALL.RNKS)) {
-    cat("\n")
-    cat("  \n##### ",  n, "  \n  ")
-    #print(n)
-    RNKS = ALL.RNKS[[n]]
-    names(RNKS) = paste0(names(RNKS),' - Pval = ',sprintf('%.1e',PVAL[[n]][,5]))
-    roc(RNKS,max=n.samples,title=paste0(annotID,' - level : ',n))
-    
-  }
-  # RNKS.df <- lapply(setNames(names(ALL.RNKS), names(ALL.RNKS)), function(n){
-  #   RNKS = ALL.RNKS[[n]]
-  #   RNKS <- lapply(RNKS, function(x) {c(0, x, n.samples)})
-  #   names(RNKS) = paste0(names(RNKS),' - Pval = ',sprintf('%.1e',PVAL[[n]][,5]))
-  #   
-  #   rnk.df <- stack(RNKS)
-  #   colnames(rnk.df) <- c("rank", "pval")
-  #   rnk.df$feature <- n
-  #   
-  #   return(rnk.df)
-  # })
-  # return(do.call(rbind, RNKS.df))
-}
-
-
-# rnk.df <- recovery_plot(tmp.hmatrix, rna.annotation, "Celltype")
-# head(rnk.df)
-# library(dplyr)
-# rnk.df %>%
-#   group_by(feature, pval) %>%
-#   mutate(prop = c(0, (1:(n()-1))/(n()-1))) %>%
-#   mutate(signature = gsub(" - Pval.*", "", pval)) %>%
-#   ggplot(aes(x=rank, y=prop, color=signature)) +
-#   #geom_line() +
-#   geom_step() +
-#   geom_abline(slope = 1/max(rnk.df$rank), intercept = (1-1/4)/(max(rnk.df$rank)),linetype = 2) +
-#   facet_grid(feature ~.) +
-#   scale_color_brewer(palette = "Set1") +
-#   theme_bw()
-
-##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
-##                    Plot H matrix heatmap integrative NMF                   ##
-##––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––##
-
-
-plotH_oneView <- function(int_nmf, viewID, k, heat.anno, col=viridis(100), 
-                          scale_color=TRUE, displayID = viewID){
-  # Find which iteration returned the best results
-  
-  k <- paste0("k", k)
-  top_idx <- int_nmf@best_factorization_idx
-  idx <- top_idx[match(k, names(top_idx))]
-  
-  sharedH <- int_nmf@shared_HMatrix_list[[k]][[idx]]
-  Hview   <- int_nmf@view_specific_HMatrix_list[[k]][[idx]][[viewID]]
-  
-  # Define total H matrix
-  totalH <- sharedH + Hview
-  # Color Function
-  if (scale_color) {
-    colf <- circlize::colorRamp2(seq(0, max(totalH), length.out = 100), col)
-  } else {
-    colf <- col
-  }
-  
-  main_hist <- hclust(as.dist(1 - cor(totalH, method = "pearson")))
-  
-  tH.heatmap <- Heatmap(totalH,
-                        col = colf,
-                        name = "Total Exposure",
-                        column_title = "Total H matrix",
-                        cluster_columns = main_hist,
-                        show_column_dend = TRUE,
-                        top_annotation = heat.anno, 
-                        show_column_names = FALSE,
-                        show_row_names = FALSE,
-                        cluster_rows = FALSE)
-  
-  sH.heatmap <- Heatmap(sharedH,
-                        col = colf,
-                        name = "Shared Exposure",
-                        column_title = "Shared H matrix",
-                        cluster_columns = main_hist,
-                        show_column_dend = TRUE,
-                        top_annotation = heat.anno,
-                        show_column_names = FALSE,
-                        show_row_names = FALSE,
-                        cluster_rows = FALSE)
-  
-  vH.heatmap <- Heatmap(Hview,
-                        col = colf,
-                        name = "View Specific Exposure",
-                        column_title = "View specific H matrix",
-                        cluster_columns = main_hist,
-                        show_column_dend = TRUE,
-                        top_annotation = heat.anno,
-                        show_column_names = FALSE,
-                        show_row_names = FALSE,
-                        cluster_rows = FALSE)
-  #print(tH.heatmap + sH.heatmap + vH.heatmap)
-  
-  
-  ht_global_opt(heatmap_legend_grid_height = unit(.25, "cm"))
-  ht_list <- tH.heatmap + sH.heatmap + vH.heatmap
-  draw(ht_list, row_title = displayID)
-  ht_global_opt(RESET = TRUE)
-}
-
-
-
-```
 

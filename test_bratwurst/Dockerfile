@@ -7,6 +7,8 @@ LABEL maintainer="Andres Quintero a.quintero@dkfz-heidelberg.de"
 
     
 RUN R -e "BiocManager::install('DESeq2', version = '3.8', update = FALSE)"
+RUN R -e "BiocManager::install('gage', version = '3.8', update = FALSE)"
+RUN R -e "install.packages('DT')"
 
 
 
@@ -29,6 +31,7 @@ RUN mkdir -p /home/hdsu/.rstudio/monitored/user-settings/ && echo "uiPrefs={\"th
 
 COPY --chown=hdsu /test_bratwurst/data /home/hdsu/Corces_NMF/data
 COPY --chown=hdsu /test_bratwurst/src /home/hdsu/Corces_NMF/src
+COPY --chown=hdsu /test_bratwurst/db /home/hdsu/Corces_NMF/db
 
 
 
