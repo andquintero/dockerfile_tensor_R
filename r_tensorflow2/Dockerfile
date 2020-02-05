@@ -32,7 +32,7 @@ RUN ${PIP} --no-cache-dir install --upgrade \
 RUN ln -s $(which ${PYTHON}) /usr/local/bin/python 
 
 
-RUN ${PIP} install tensorflow==2.0.0-alpha0
+RUN ${PIP} install tensorflow==2.1.0
 
 # # Pick up some TF dependencies
 # RUN apt-get update && apt-get install -y --no-install-recommends \
